@@ -182,6 +182,33 @@ check(
   calls("dispose").length >= 2 && calls("register").every((call) => call.entry),
 );
 
+console.log("наша редакция менеджера: служба ядра дополнена прежними методами");
+// Менеджер 0.2.14 не объявляет службу сам — её держит ядро (rc.3), а менеджер дополняет её
+// registerServer/unregisterServer. Запись через ядровой register() в панель не попадает,
+// поэтому при наличии registerServer плагин обязан идти через него.
+const serverCalls = [];
+const serverRegistered = new Map();
+fakeManager.registerServer = async (server) => {
+  serverCalls.push({ method: "registerServer", name: server.name });
+  serverRegistered.set(server.name, server);
+  return { name: server.name, existing: false };
+};
+fakeManager.unregisterServer = async (name) => {
+  serverCalls.push({ method: "unregisterServer", name });
+  serverRegistered.delete(name);
+};
+const legacyBefore = calls("register").filter((call) => call.name === "1c-naparnik").length;
+await callRoute(ROUTE, { token: "token-2222-bbbb" }, "POST");
+check("запись ушла через registerServer", serverCalls.some((call) => call.method === "registerServer" && call.name === "1c-naparnik"));
+check("ядровой register не использован", calls("register").filter((call) => call.name === "1c-naparnik").length === legacyBefore);
+const grafted = serverRegistered.get("1c-naparnik") || {};
+check("запись полная: имя и транспорт", grafted.name === "1c-naparnik" && grafted.transport === "stdio", JSON.stringify(grafted));
+check("инструмент передан в записи", grafted.toolDefinitions?.[0]?.name === "its_help", JSON.stringify(grafted.toolDefinitions?.map((item) => item.name)));
+const visible = await callRoute(ROUTE);
+check("сервер виден в менеджере", visible.json.registered === true, JSON.stringify(visible.json));
+await callRoute(ROUTE, { token: "" }, "POST");
+check("снятие через unregisterServer", serverCalls.some((call) => call.method === "unregisterServer" && call.name === "1c-naparnik"));
+
 // Windows держит каталог, пока живы открытые хендлы (сервер проверок слушает порт).
 try {
   rmSync(work, { recursive: true, force: true });

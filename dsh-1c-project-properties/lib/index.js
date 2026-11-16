@@ -1208,7 +1208,14 @@ function managerService() {
 // До 0.2.2-rc.3 менеджер принимал запись сервера целиком (`registerServer`) и
 // умел `unregisterServer`, `getStatus`, `reconnect`. С rc.3 — `register(name, entry)`,
 // снятие возвращаемым disposer'ом, состояние в `list()`, перезапуск `restart()`.
-// Форму выбираем по факту наличия метода: плагин ставится и в прежние сборки.
+//
+// ⚠️ С rc.3 службу `mcpManager` объявляет ЯДРО, а не менеджер: наша редакция менеджера
+// (0.2.14) отдаёт имя хосту и лишь дополняет его службу прежними методами. Запись через
+// ядровой `register()` попадает в реестр ядра, а панель менеджера строит список только из
+// своего хранилища и своего runtimeRegistry — сервер работает, но в панели его нет
+// (проверено: `1c-platform-context` поднят, `managerRegistered: true`, в списке отсутствует).
+// Поэтому при наличии `registerServer` идём через него: он пишет в реестр менеджера и
+// тянет за собой его middleware. Ядровой `register()` — только когда прежней линии нет.
 
 /**
  * Регистрация сервера в менеджере под ту линию API, что стоит в сборке.
@@ -1218,6 +1225,15 @@ function managerService() {
  */
 async function registerManagedServer(service, entry) {
   const name = entry.name;
+  if (typeof service.registerServer === "function") {
+    try {
+      const result = await service.registerServer(entry);
+      return { ok: true, dispose: null, existing: Boolean(result && result.existing), error: "" };
+    } catch (error) {
+      const message = String((error && error.message) || error);
+      return { ok: false, dispose: null, existing: /already configured or registered/i.test(message), error: message };
+    }
+  }
   if (typeof service.register === "function") {
     const { name: _ignored, ...rest } = entry;
     try {
@@ -1227,14 +1243,6 @@ async function registerManagedServer(service, entry) {
       const message = String((error && error.message) || error);
       // Занятое имя менеджер называет отдельной ошибкой: чужую запись не трогаем.
       return { ok: false, dispose: null, existing: /already configured or registered/i.test(message), error: message };
-    }
-  }
-  if (typeof service.registerServer === "function") {
-    try {
-      const result = await service.registerServer(entry);
-      return { ok: true, dispose: null, existing: Boolean(result && result.existing), error: "" };
-    } catch (error) {
-      return { ok: false, dispose: null, existing: false, error: String((error && error.message) || error) };
     }
   }
   return { ok: false, dispose: null, existing: false, error: "менеджер MCP не принимает серверы: нет ни register, ни registerServer" };
